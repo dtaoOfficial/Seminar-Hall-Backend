@@ -40,7 +40,6 @@ public class SecurityConfig {
     @Autowired
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
-    // read from spring property cors.allowed-origins (fallback to localhost for dev)
     @Value("${cors.allowed-origins:http://localhost:3000}")
     private String corsAllowedOrigins;
 
@@ -66,7 +65,6 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Parse comma-separated origins, trim blanks
         List<String> origins = Arrays.stream(corsAllowedOrigins.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
@@ -85,7 +83,9 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(org.springframework.security.config.annotation.web.builders.HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(
+            org.springframework.security.config.annotation.web.builders.HttpSecurity http) throws Exception {
+
         http
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -93,34 +93,35 @@ public class SecurityConfig {
                 .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
 
-                        // Public endpoints
+                        // ✅ Public endpoints (added /api/health)
+                        .requestMatchers("/api/health").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/users/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/users").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                        // Seminar read: both admin and department may read
+                        // Seminar read
                         .requestMatchers(HttpMethod.GET, "/api/seminars/**").hasAnyRole("ADMIN", "DEPARTMENT")
 
-                        // IMPORTANT: specific cancel endpoints BEFORE generic PUT matcher
+                        // Seminar cancel actions
                         .requestMatchers(HttpMethod.PUT, "/api/seminars/*/cancel-request").hasAnyRole("DEPARTMENT","ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/seminars/*/confirm-cancel").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/seminars/*/reject-cancel").hasRole("ADMIN")
 
-                        // Seminar create: allow both Admin and Department (dept -> creates PENDING)
+                        // Seminar create
                         .requestMatchers(HttpMethod.POST, "/api/seminars/**").hasAnyRole("ADMIN", "DEPARTMENT")
 
-                        // Seminar update/delete: Admin only
+                        // Seminar update/delete
                         .requestMatchers(HttpMethod.PUT, "/api/seminars/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/seminars/**").hasRole("ADMIN")
 
-                        // Booking requests permissions
+                        // Booking requests
                         .requestMatchers(HttpMethod.POST, "/api/requests/**").hasRole("DEPARTMENT")
                         .requestMatchers(HttpMethod.GET, "/api/requests/**").hasAnyRole("ADMIN", "DEPARTMENT")
                         .requestMatchers(HttpMethod.PUT, "/api/requests/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/requests/**").hasRole("ADMIN")
 
-                        // Departments (read -> all, modify -> admin)
+                        // Departments
                         .requestMatchers(HttpMethod.GET, "/api/departments/**").hasAnyRole("ADMIN","DEPARTMENT")
                         .requestMatchers(HttpMethod.POST, "/api/departments/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/departments/**").hasRole("ADMIN")
@@ -133,14 +134,11 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PUT, "/api/halls/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/halls/**").hasRole("ADMIN")
 
-                        // everything else requires authentication
+                        // Everything else requires authentication
                         .anyRequest().authenticated()
                 );
 
-        // Add JWT filter before UsernamePasswordAuthenticationFilter
         http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
-
-        // set the DaoAuthenticationProvider so authManager uses our provider
         http.authenticationProvider(authProvider());
 
         return http.build();
