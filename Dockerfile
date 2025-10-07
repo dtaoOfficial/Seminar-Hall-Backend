@@ -1,20 +1,19 @@
-# Stage 1: build with Maven + JDK 24
-FROM maven:3.9.5-jdk-24 AS builder
+# Stage 1: build using Eclipse Temurin JDK 24 and install Maven manually
+FROM eclipse-temurin:24-jdk AS builder
 WORKDIR /workspace
 
-# copy only what we need for dependency resolution first
-COPY pom.xml .
-COPY .mvn .mvn
-COPY mvnw mvnw
+# install Maven
+RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
 
-# download dependencies (speeds up CI)
+# copy pom and download dependencies
+COPY pom.xml .
 RUN mvn -B -DskipTests dependency:go-offline
 
 # copy sources and build
 COPY src ./src
 RUN mvn -B -DskipTests clean package
 
-# Stage 2: runtime image with JRE 24
+# Stage 2: lightweight runtime with JRE 24
 FROM eclipse-temurin:24-jre
 WORKDIR /app
 COPY --from=builder /workspace/target/*.jar app.jar
