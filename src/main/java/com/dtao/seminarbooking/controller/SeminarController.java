@@ -5,37 +5,45 @@ import com.dtao.seminarbooking.model.Seminar;
 import com.dtao.seminarbooking.service.EmailService;
 import com.dtao.seminarbooking.service.HallOperatorService;
 import com.dtao.seminarbooking.service.SeminarService;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 @RestController
 @RequestMapping("/api/seminars")
 public class SeminarController {
 
-    @Autowired
-    private SeminarService seminarService;
+    private static final Logger log = LoggerFactory.getLogger(SeminarController.class);
 
-    @Autowired
-    private EmailService emailService;
+    private final SeminarService seminarService;
+    private final EmailService emailService;
+    private final HallOperatorService hallOperatorService;
 
-    @Autowired
-    private HallOperatorService hallOperatorService;
+    public SeminarController(SeminarService seminarService,
+                             EmailService emailService,
+                             HallOperatorService hallOperatorService) {
+        this.seminarService = seminarService;
+        this.emailService = emailService;
+        this.hallOperatorService = hallOperatorService;
+    }
 
     @PostMapping
     public ResponseEntity<?> createSeminar(@RequestBody Seminar seminar) {
         try {
             Seminar saved = seminarService.addSeminar(seminar);
 
-            // 1) Send booking confirmation to requester (existing behaviour)
+            // 1) Send booking confirmation to requester (async fire-and-forget)
             try {
-                emailService.sendBookingCreatedEmail(saved);
+                CompletableFuture<Boolean> f = emailService.sendBookingCreatedEmail(saved);
+                attachLogging(f, "sendBookingCreatedEmail", saved.getEmail());
             } catch (Exception ex) {
-                System.err.println("[SeminarController] Booking confirmation email failed: " + ex.getMessage());
-                ex.printStackTrace();
+                log.error("[SeminarController] Failed to initiate booking-created email: {}", ex.getMessage(), ex);
             }
 
             // 2) Notify ALL hall operators for this hall (created event)
@@ -44,56 +52,59 @@ public class SeminarController {
                     List<HallOperator> heads = hallOperatorService.findByHallName(saved.getHallName());
                     for (HallOperator head : heads) {
                         try {
-                            emailService.sendHallHeadBookingCreatedEmail(head, saved);
+                            CompletableFuture<Boolean> f = emailService.sendHallHeadBookingCreatedEmail(head, saved);
+                            attachLogging(f, "sendHallHeadBookingCreatedEmail", head.getHeadEmail());
                         } catch (Exception ex) {
-                            System.err.println("[SeminarController] Hall head booking-create email failed: " + ex.getMessage());
-                            ex.printStackTrace();
+                            log.error("[SeminarController] Failed to initiate hall-head booking-created email for head={} : {}",
+                                    head == null ? "null" : head.getHeadEmail(), ex.getMessage(), ex);
                         }
                     }
                 }
             } catch (Exception ex) {
-                System.err.println("[SeminarController] Error notifying hall operators on create: " + ex.getMessage());
-                ex.printStackTrace();
+                log.error("[SeminarController] Error while finding hall operators on create: {}", ex.getMessage(), ex);
             }
 
-            // 3) If the seminar was created already with status APPROVED (admin-created auto-approve),
-            //    immediately send the APPROVED notifications to requester + hall operators.
+            // 3) If created already APPROVED (admin-created auto-approve), immediately send APPROVED notifications
             try {
                 String status = saved.getStatus() == null ? "" : saved.getStatus().toUpperCase();
                 if ("APPROVED".equals(status)) {
-                    String adminReason = "Approved & applied by admin"; // small message shown in email
-                    // notify requester with APPROVED status (so they receive the approved email)
+                    String adminReason = "Approved & applied by admin";
+
+                    // notify requester
                     try {
-                        emailService.sendStatusNotification(saved.getEmail(), saved, "APPROVED", adminReason);
+                        CompletableFuture<Boolean> f = emailService.sendStatusNotification(saved.getEmail(), saved, "APPROVED", adminReason);
+                        attachLogging(f, "sendStatusNotification(APPROVED)", saved.getEmail());
                     } catch (Exception ex) {
-                        System.err.println("[SeminarController] Immediate approved status email to requester failed: " + ex.getMessage());
-                        ex.printStackTrace();
+                        log.error("[SeminarController] Failed to initiate immediate approved status email to requester: {}", ex.getMessage(), ex);
                     }
 
                     // notify all hall operators with approved email
-                    if (saved.getHallName() != null) {
-                        List<HallOperator> heads = hallOperatorService.findByHallName(saved.getHallName());
-                        for (HallOperator head : heads) {
-                            try {
-                                emailService.sendHallHeadBookingApprovedEmail(head, saved, adminReason);
-                            } catch (Exception ex) {
-                                System.err.println("[SeminarController] Hall head immediate-approved email failed: " + ex.getMessage());
-                                ex.printStackTrace();
+                    try {
+                        if (saved.getHallName() != null) {
+                            List<HallOperator> heads = hallOperatorService.findByHallName(saved.getHallName());
+                            for (HallOperator head : heads) {
+                                try {
+                                    CompletableFuture<Boolean> f = emailService.sendHallHeadBookingApprovedEmail(head, saved, adminReason);
+                                    attachLogging(f, "sendHallHeadBookingApprovedEmail", head.getHeadEmail());
+                                } catch (Exception ex) {
+                                    log.error("[SeminarController] Failed to initiate hall-head immediate-approved email for head={} : {}",
+                                            head == null ? "null" : head.getHeadEmail(), ex.getMessage(), ex);
+                                }
                             }
                         }
+                    } catch (Exception ex) {
+                        log.error("[SeminarController] Error while notifying hall operators for immediate approval: {}", ex.getMessage(), ex);
                     }
                 }
             } catch (Exception ex) {
-                // don't fail create if these notification attempts fail
-                System.err.println("[SeminarController] Error sending immediate approved notifications: " + ex.getMessage());
-                ex.printStackTrace();
+                log.error("[SeminarController] Error sending immediate approved notifications: {}", ex.getMessage(), ex);
             }
 
             return ResponseEntity.ok(saved);
         } catch (RuntimeException ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
         } catch (Exception ex) {
-            ex.printStackTrace();
+            log.error("[SeminarController] createSeminar unexpected error: {}", ex.getMessage(), ex);
             return ResponseEntity.status(500).body(Map.of("error", "Server error"));
         }
     }
@@ -141,7 +152,7 @@ public class SeminarController {
             if (beforeStatus != null && afterStatus != null && !beforeStatus.equals(afterStatus)) changed = true;
 
             if (changed && afterStatus != null) {
-                // only send for important statuses to avoid your daily limit issues
+                // only send for important statuses
                 if (afterStatus.equals("APPROVED") || afterStatus.equals("REJECTED")
                         || afterStatus.equals("CANCELLED") || afterStatus.equals("CANCEL_REQUESTED")) {
 
@@ -150,12 +161,12 @@ public class SeminarController {
                         reason = updatedSeminar.getCancellationReason();
                     }
 
-                    // 1) Notify the booking owner (existing generic notification)
+                    // 1) Notify the booking owner (async)
                     try {
-                        emailService.sendStatusNotification(seminar.getEmail(), seminar, afterStatus, reason);
+                        CompletableFuture<Boolean> f = emailService.sendStatusNotification(seminar.getEmail(), seminar, afterStatus, reason);
+                        attachLogging(f, "sendStatusNotification(" + afterStatus + ")", seminar.getEmail());
                     } catch (Exception ex) {
-                        System.err.println("[SeminarController] Status notification to requester failed: " + ex.getMessage());
-                        ex.printStackTrace();
+                        log.error("[SeminarController] Failed to initiate status notification to requester: {}", ex.getMessage(), ex);
                     }
 
                     // 2) Notify ALL hall operators with specialized messages
@@ -164,32 +175,35 @@ public class SeminarController {
                             List<HallOperator> heads = hallOperatorService.findByHallName(seminar.getHallName());
                             for (HallOperator head : heads) {
                                 try {
+                                    CompletableFuture<Boolean> f = null;
                                     switch (afterStatus) {
                                         case "APPROVED":
-                                            emailService.sendHallHeadBookingApprovedEmail(head, seminar, reason);
+                                            f = emailService.sendHallHeadBookingApprovedEmail(head, seminar, reason);
+                                            attachLogging(f, "sendHallHeadBookingApprovedEmail", head.getHeadEmail());
                                             break;
                                         case "REJECTED":
-                                            emailService.sendHallHeadBookingRejectedEmail(head, seminar, reason);
+                                            f = emailService.sendHallHeadBookingRejectedEmail(head, seminar, reason);
+                                            attachLogging(f, "sendHallHeadBookingRejectedEmail", head.getHeadEmail());
                                             break;
                                         case "CANCEL_REQUESTED":
-                                            // use the 'created' style to notify head that cancellation was requested
-                                            emailService.sendHallHeadBookingCreatedEmail(head, seminar);
+                                            f = emailService.sendHallHeadBookingCreatedEmail(head, seminar);
+                                            attachLogging(f, "sendHallHeadBookingCreatedEmail (cancel-request)", head.getHeadEmail());
                                             break;
                                         case "CANCELLED":
-                                            emailService.sendHallHeadBookingCancelledEmail(head, seminar, reason);
+                                            f = emailService.sendHallHeadBookingCancelledEmail(head, seminar, reason);
+                                            attachLogging(f, "sendHallHeadBookingCancelledEmail", head.getHeadEmail());
                                             break;
                                         default:
                                             break;
                                     }
                                 } catch (Exception ex) {
-                                    System.err.println("[SeminarController] Hall head status email failed: " + ex.getMessage());
-                                    ex.printStackTrace();
+                                    log.error("[SeminarController] Failed to initiate hall-head status email for head={} : {}",
+                                            head == null ? "null" : head.getHeadEmail(), ex.getMessage(), ex);
                                 }
                             }
                         }
                     } catch (Exception ex) {
-                        System.err.println("[SeminarController] Error notifying hall operators on status change: " + ex.getMessage());
-                        ex.printStackTrace();
+                        log.error("[SeminarController] Error notifying hall operators on status change: {}", ex.getMessage(), ex);
                     }
                 }
             }
@@ -198,7 +212,7 @@ public class SeminarController {
         } catch (RuntimeException ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
         } catch (Exception ex) {
-            ex.printStackTrace();
+            log.error("[SeminarController] updateSeminar unexpected error: {}", ex.getMessage(), ex);
             return ResponseEntity.status(500).body(Map.of("error", "Server error"));
         }
     }
@@ -207,10 +221,10 @@ public class SeminarController {
     public ResponseEntity<Void> deleteSeminar(@PathVariable String id) {
         seminarService.getById(id).ifPresent(seminar -> {
             try {
-                emailService.sendSeminarRemovedEmail(seminar);
+                CompletableFuture<Boolean> f = emailService.sendSeminarRemovedEmail(seminar);
+                attachLogging(f, "sendSeminarRemovedEmail", seminar.getEmail());
             } catch (Exception ex) {
-                System.err.println("[SeminarController] Seminar removed email failed: " + ex.getMessage());
-                ex.printStackTrace();
+                log.error("[SeminarController] Failed to initiate seminar-removed email: {}", ex.getMessage(), ex);
             }
 
             // optionally notify hall operator about removal as well
@@ -219,16 +233,16 @@ public class SeminarController {
                     List<HallOperator> heads = hallOperatorService.findByHallName(seminar.getHallName());
                     for (HallOperator head : heads) {
                         try {
-                            emailService.sendHallHeadBookingCancelledEmail(head, seminar, "Booking removed from portal");
+                            CompletableFuture<Boolean> f = emailService.sendHallHeadBookingCancelledEmail(head, seminar, "Booking removed from portal");
+                            attachLogging(f, "sendHallHeadBookingCancelledEmail", head.getHeadEmail());
                         } catch (Exception ex) {
-                            System.err.println("[SeminarController] Hall head seminar-removed email failed: " + ex.getMessage());
-                            ex.printStackTrace();
+                            log.error("[SeminarController] Failed to initiate hall-head seminar-removed email for head={} : {}",
+                                    head == null ? "null" : head.getHeadEmail(), ex.getMessage(), ex);
                         }
                     }
                 }
             } catch (Exception ex) {
-                System.err.println("[SeminarController] Error notifying hall operator on deletion: " + ex.getMessage());
-                ex.printStackTrace();
+                log.error("[SeminarController] Error notifying hall operator on deletion: {}", ex.getMessage(), ex);
             }
         });
 
@@ -255,12 +269,12 @@ public class SeminarController {
                 return ResponseEntity.notFound().build();
             }
 
-            // send a notification to the booking owner that a cancel was requested (optional)
+            // send a notification to the booking owner that a cancel was requested (async)
             try {
-                emailService.sendStatusNotification(updated.getEmail(), updated, "CANCEL_REQUESTED", cancellationReason);
+                CompletableFuture<Boolean> f = emailService.sendStatusNotification(updated.getEmail(), updated, "CANCEL_REQUESTED", cancellationReason);
+                attachLogging(f, "sendStatusNotification(CANCEL_REQUESTED)", updated.getEmail());
             } catch (Exception ex) {
-                System.err.println("[SeminarController] Cancel-request email failed: " + ex.getMessage());
-                ex.printStackTrace();
+                log.error("[SeminarController] Failed to initiate cancel-request email to requester: {}", ex.getMessage(), ex);
             }
 
             // notify hall operator too
@@ -269,23 +283,23 @@ public class SeminarController {
                     List<HallOperator> heads = hallOperatorService.findByHallName(updated.getHallName());
                     for (HallOperator head : heads) {
                         try {
-                            emailService.sendHallHeadBookingCreatedEmail(head, updated);
+                            CompletableFuture<Boolean> f = emailService.sendHallHeadBookingCreatedEmail(head, updated);
+                            attachLogging(f, "sendHallHeadBookingCreatedEmail (cancel-request)", head.getHeadEmail());
                         } catch (Exception ex) {
-                            System.err.println("[SeminarController] Hall head cancel-request email failed: " + ex.getMessage());
-                            ex.printStackTrace();
+                            log.error("[SeminarController] Failed to initiate hall-head cancel-request email for head={} : {}",
+                                    head == null ? "null" : head.getHeadEmail(), ex.getMessage(), ex);
                         }
                     }
                 }
             } catch (Exception ex) {
-                System.err.println("[SeminarController] Error notifying hall operator on cancel-request: " + ex.getMessage());
-                ex.printStackTrace();
+                log.error("[SeminarController] Error notifying hall operator on cancel-request: {}", ex.getMessage(), ex);
             }
 
             return ResponseEntity.ok(updated);
         } catch (RuntimeException ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
         } catch (Exception ex) {
-            ex.printStackTrace();
+            log.error("[SeminarController] requestCancel unexpected error: {}", ex.getMessage(), ex);
             return ResponseEntity.status(500).body(Map.of("error", "Server error"));
         }
     }
@@ -310,5 +324,21 @@ public class SeminarController {
                         (s.getSlot() != null && s.getSlot().toLowerCase().contains(slot.toLowerCase())))
                 .toList();
         return ResponseEntity.ok(filtered);
+    }
+
+    // -------------------- helper to attach logging to futures --------------------
+    private void attachLogging(CompletableFuture<Boolean> future, String operation, String target) {
+        if (future == null) return;
+        future.whenComplete((ok, ex) -> {
+            if (ex != null) {
+                log.error("[Email] {} failed for target={} : {}", operation, target, ex.getMessage(), ex);
+            } else {
+                if (Boolean.TRUE.equals(ok)) {
+                    log.info("[Email] {} succeeded for target={}", operation, target);
+                } else {
+                    log.warn("[Email] {} returned false for target={}", operation, target);
+                }
+            }
+        });
     }
 }
