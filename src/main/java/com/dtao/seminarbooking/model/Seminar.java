@@ -3,6 +3,14 @@ package com.dtao.seminarbooking.model;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.util.Map;
+
+/**
+ * Seminar model.
+ *
+ * New: supports per-day time map `daySlots` where key = "YYYY-MM-DD" and value = DaySlot (startTime/endTime).
+ * A null value in the map indicates the day is a full-day booking.
+ */
 @Document(collection = "seminars")
 public class Seminar {
     @Id
@@ -29,7 +37,28 @@ public class Seminar {
     private String cancellationReason;
     private String createdBy;
 
+    // New: per-day time map (optional). Key: "YYYY-MM-DD" -> value: DaySlot or null (null -> full-day)
+    private Map<String, DaySlot> daySlots;
+
     public Seminar() {}
+
+    // DaySlot nested class - represents time for a single day
+    public static class DaySlot {
+        private String startTime;
+        private String endTime;
+
+        public DaySlot() {}
+
+        public DaySlot(String startTime, String endTime) {
+            this.startTime = startTime;
+            this.endTime = endTime;
+        }
+
+        public String getStartTime() { return startTime; }
+        public String getEndTime() { return endTime; }
+        public void setStartTime(String startTime) { this.startTime = startTime; }
+        public void setEndTime(String endTime) { this.endTime = endTime; }
+    }
 
     // Getters
     public String getId() { return id; }
@@ -50,6 +79,7 @@ public class Seminar {
     public String getAppliedAt() { return appliedAt; }
     public String getCancellationReason() { return cancellationReason; }
     public String getCreatedBy() { return createdBy; }
+    public Map<String, DaySlot> getDaySlots() { return daySlots; }
 
     // Setters
     public void setId(String id) { this.id = id; }
@@ -70,4 +100,5 @@ public class Seminar {
     public void setAppliedAt(String appliedAt) { this.appliedAt = appliedAt; }
     public void setCancellationReason(String cancellationReason) { this.cancellationReason = cancellationReason; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+    public void setDaySlots(Map<String, DaySlot> daySlots) { this.daySlots = daySlots; }
 }
