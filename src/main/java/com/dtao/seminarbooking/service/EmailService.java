@@ -18,6 +18,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Centralised email service used across controllers.
+ * - async methods return CompletableFuture<Boolean>
+ * - synchronous OTP sender returns boolean
+ * - HTML messages are polite & professional
+ */
 @Service
 public class EmailService {
 
@@ -51,7 +57,7 @@ public class EmailService {
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, false, StandardCharsets.UTF_8.name());
-            String txt = "Your OTP is: " + escapePlain(otp) + "\nValid for 5 minutes.\n\nIf you didn't request this, ignore this email.";
+            String txt = "Your OTP is: " + escapePlain(otp) + "\nValid for 5 minutes.\n\nIf you did not request this, please ignore this email.";
             helper.setFrom(mailFrom);
             helper.setTo(toEmail);
             helper.setSubject("Seminar Booking - Password Reset OTP");
@@ -75,20 +81,19 @@ public class EmailService {
         String to = user.getEmail();
         String name = user.getName() == null ? "User" : user.getName();
 
-        String subject = "Welcome to Seminar Booking — " + companyName;
+        String subject = "Welcome to the Seminar Booking Portal — " + companyName;
         StringBuilder html = new StringBuilder();
         html.append("<html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;padding:18px;\">")
                 .append("<div style=\"max-width:650px;margin:0 auto;border:1px solid #e6e6e6;padding:18px;border-radius:6px;\">")
                 .append("<h2 style=\"color:#0b5ed7;margin:0 0 8px 0;\">Welcome to ").append(escape(companyName)).append("</h2>")
-                .append("<p>Hi <strong>").append(escape(name)).append("</strong>,</p>")
-                .append("<p>Thank you for creating an account on the Seminar Booking portal. You can now request halls and manage your bookings.</p>")
+                .append("<p>Dear ").append(escape(name)).append(",</p>")
+                .append("<p>Thank you for creating an account on the Seminar Booking portal. You can now request seminar halls and manage your bookings easily.</p>")
                 .append("<p><strong>Account details</strong><br/>Email: ").append(escape(to)).append("</p>")
                 .append("<p>Visit: <a href=\"").append(websiteUrl).append("\">").append(websiteUrl).append("</a></p>")
                 .append("<hr style=\"border:none;border-top:1px solid #eee\"/>")
-                .append("<p style=\"font-size:13px;color:#444\">Owner / Admin: <strong>")
-                .append(escape(ownerName)).append("</strong><br/>Company: <strong>")
-                .append(escape(companyName)).append("</strong></p>")
-                .append("<p style=\"font-size:12px;color:#888;margin-top:6px\">If you didn't request this account, ignore this email.</p>")
+                .append("<p style=\"font-size:13px;color:#444\">Owner / Admin: <strong>").append(escape(ownerName)).append("</strong><br/>")
+                .append("Company: <strong>").append(escape(companyName)).append("</strong></p>")
+                .append("<p style=\"font-size:12px;color:#888;margin-top:6px\">If you did not request this account, please ignore this email or contact the administration.</p>")
                 .append("</div></body></html>");
 
         return runSendHtmlMailAsync(to, subject, html.toString());
@@ -116,13 +121,13 @@ public class EmailService {
         if (isApproved) {
             html.append("<div style='background:#e9f7ef;border:1px solid #c7efd3;padding:10px;border-radius:6px;margin-bottom:12px'>")
                     .append("<strong style='color:#2f8a4b'>Approved & applied by admin</strong>")
-                    .append("<div style='font-size:13px;color:#444;margin-top:6px'>This booking was created by the admin and has been approved automatically.</div>")
+                    .append("<div style='font-size:13px;color:#444;margin-top:6px'>Your booking has been approved by the administrator.</div>")
                     .append("</div>");
         }
 
         html.append("<h2 style='color:#0b5ed7'>Seminar Booking Received</h2>")
                 .append("<p>Dear ").append(escape(s.getBookingName() == null ? "User" : s.getBookingName())).append(",</p>")
-                .append("<p>Your booking request was successfully received. Details:</p>")
+                .append("<p>Your booking request has been successfully received. Details below:</p>")
                 .append("<table style='width:100%;border-collapse:collapse'>")
                 .append(rowTd("Hall", safe(s.getHallName())))
                 .append(rowTd("Date", safe(s.getDate())))
@@ -132,15 +137,14 @@ public class EmailService {
                 .append("</table>");
 
         if (isApproved)
-            html.append("<p style='margin-top:12px;color:#333'>Status: <strong style='color:green'>APPROVED</strong> (applied by admin)</p>");
+            html.append("<p style='margin-top:12px;color:#333'>Status: <strong style='color:green'>APPROVED</strong></p>");
         else
-            html.append("<p style='margin-top:12px;color:#333'>Admin will review and you will be notified when the status changes.</p>");
+            html.append("<p style='margin-top:12px;color:#333'>Our admin team will review this request and notify you when the status changes.</p>");
 
         html.append("<hr style='border:none;border-top:1px solid #eee'/>")
                 .append("<p style='font-size:13px'>Owner / Admin: <strong>").append(escape(ownerName))
                 .append("</strong><br/>Company: <strong>").append(escape(companyName)).append("</strong></p>")
-                .append("<p style='font-size:13px'>Visit: <a href='").append(websiteUrl).append("'>")
-                .append(websiteUrl).append("</a></p>")
+                .append("<p style='font-size:13px'>Visit: <a href='").append(websiteUrl).append("'>").append(websiteUrl).append("</a></p>")
                 .append("</div></body></html>");
 
         return runSendHtmlMailAsync(to, subject, html.toString());
@@ -157,7 +161,8 @@ public class EmailService {
         html.append("<html><body style='font-family:Arial,Helvetica,sans-serif;padding:14px;color:#111'>")
                 .append("<div style='max-width:720px;margin:0 auto;border:1px solid #eaeaea;padding:16px;border-radius:8px'>")
                 .append("<h2 style='color:#d9534f'>Seminar Booking Removed</h2>")
-                .append("<p>Your booking has been removed from the portal. Details:</p>")
+                .append("<p>Dear ").append(escape(s.getBookingName() == null ? "User" : s.getBookingName())).append(",</p>")
+                .append("<p>Your booking has been removed from the portal. Details below:</p>")
                 .append("<table style='width:100%;border-collapse:collapse'>")
                 .append(rowTd("Hall", safe(s.getHallName())))
                 .append(rowTd("Date", safe(s.getDate())))
@@ -174,24 +179,25 @@ public class EmailService {
     }
 
     // -------------------- Account removed (async) --------------------
+    // This is the method your controllers were calling (added here).
     @Async
     public CompletableFuture<Boolean> sendAccountRemovedEmail(User user) {
         if (user == null || !validEmail(user.getEmail())) return CompletableFuture.completedFuture(false);
         String to = user.getEmail();
-        String subject = "Your account removed from Seminar Booking portal";
+        String subject = "Account removed from Seminar Booking portal — " + companyName;
 
         StringBuilder html = new StringBuilder();
         html.append("<html><body style='font-family:Arial,Helvetica,sans-serif;padding:14px;color:#111'>")
                 .append("<div style='max-width:720px;margin:0 auto;border:1px solid #eaeaea;padding:16px;border-radius:8px'>")
                 .append("<h2 style='color:#d9534f'>Account Removed</h2>")
-                .append("<p>Dear ").append(escape(user.getName())).append(",</p>")
-                .append("<p>Your account with email <strong>").append(escape(user.getEmail())).append("</strong> has been removed from the Seminar Booking portal.</p>")
-                .append("<p>If you have any questions, contact the college administration at New Horizon College of Engineering.</p>")
+                .append("<p>Dear ").append(escape(user.getName() == null ? "User" : user.getName())).append(",</p>")
+                .append("<p>We are writing to confirm that your account associated with <strong>").append(escape(user.getEmail())).append("</strong> has been removed from the Seminar Booking portal.</p>")
+                .append("<p>If you believe this was done in error, please contact your department or the administration to request assistance.</p>")
                 .append("<hr style='border:none;border-top:1px solid #eee'/>")
                 .append("<p style='font-size:13px'>Owner / Admin: <strong>").append(escape(ownerName))
                 .append("</strong><br/>Company: <strong>").append(escape(companyName)).append("</strong></p>")
-                .append("<p style='font-size:13px'>Visit: <a href='").append(websiteUrl).append("'>").append(websiteUrl)
-                .append("</a></p></div></body></html>");
+                .append("<p style='font-size:13px'>Visit: <a href='").append(websiteUrl).append("'>").append(websiteUrl).append("</a></p>")
+                .append("</div></body></html>");
 
         return runSendHtmlMailAsync(to, subject, html.toString());
     }
@@ -214,9 +220,9 @@ public class EmailService {
                 .append(rowTd("Slot", safe(s.getSlot())))
                 .append(rowTd("Event", safe(s.getSlotTitle())))
                 .append(rowTd("Booked by", safe(s.getBookingName()) + " (" + safe(s.getEmail()) + ")"))
-                .append(rowTd("Location", "Seminar Hall Block A, New Horizon College (replace with real address)"))
+                .append(rowTd("Location", "Seminar Hall Block A, New Horizon College (please coordinate internally)"))
                 .append("</table>")
-                .append("<p>Please coordinate as needed with the requester. You can visit the admin portal to view more details.</p>")
+                .append("<p>Please coordinate with the requester as needed. You may view full details in the admin portal.</p>")
                 .append("<hr style='border:none;border-top:1px solid #eee'/>")
                 .append("<p style='font-size:13px'>Owner / Admin: <strong>").append(escape(ownerName)).append("</strong><br/>Company: <strong>").append(escape(companyName)).append("</strong></p>")
                 .append("</div></body></html>");
@@ -240,7 +246,7 @@ public class EmailService {
                 .append(rowTd("Slot", safe(s.getSlot())))
                 .append(rowTd("Event", safe(s.getSlotTitle())))
                 .append(rowTd("Booked by", safe(s.getBookingName()) + " (" + safe(s.getEmail()) + ")"))
-                .append(rowTd("Location", "Seminar Hall Block A, New Horizon College (replace with real address)"));
+                .append(rowTd("Location", "Seminar Hall Block A, New Horizon College"));
         if (reason != null && !reason.isBlank()) html.append(rowTd("Admin remarks", escape(reason)));
         html.append("</table>")
                 .append("<p>Please prepare the hall accordingly and coordinate with the requester.</p>")
@@ -355,7 +361,6 @@ public class EmailService {
     private boolean sendHtmlMail(String toEmail, String subject, String htmlBody) {
         try {
             MimeMessage message = mailSender.createMimeMessage();
-            // true = multipart (not strictly required here but safe if you later add inline images/attachments)
             MimeMessageHelper helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
             helper.setFrom(mailFrom);
             helper.setTo(toEmail);
@@ -379,7 +384,6 @@ public class EmailService {
             boolean ok = sendHtmlMail(toEmail, subject, htmlBody);
             return CompletableFuture.completedFuture(ok);
         } catch (TaskRejectedException tre) {
-            // if the async executor is saturated, fail gracefully
             logger.error("[EmailService] Async executor rejected task for sending email to {} subject={}", toEmail, subject, tre);
             return CompletableFuture.completedFuture(false);
         } catch (Exception ex) {
@@ -399,7 +403,6 @@ public class EmailService {
 
     private String escape(String s) {
         if (s == null) return "";
-        // HTML-escape minimal set
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
