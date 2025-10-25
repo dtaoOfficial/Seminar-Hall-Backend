@@ -10,10 +10,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/seminars")
@@ -24,6 +25,8 @@ public class SeminarController {
     private final SeminarService seminarService;
     private final EmailService emailService;
     private final HallOperatorService hallOperatorService;
+
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ISO_LOCAL_DATE;
 
     public SeminarController(SeminarService seminarService,
                              EmailService emailService,
@@ -130,6 +133,138 @@ public class SeminarController {
             @PathVariable String date) {
         return ResponseEntity.ok(seminarService.getByHallAndDate(date, hallName));
     }
+
+    // ----------------- NEW: calendar month summary -----------------
+    /**
+     * Returns per-day summary for a given month.
+     * Query params:
+     * - hallName (optional) : filters to specific seminar hall
+     * - year (required)
+     * - month (required) : 1-12
+     *
+     * Response: List<CalendarDaySummary>
+     */
+    @GetMapping("/calendar")
+    public ResponseEntity<?> getCalendarMonthSummary(
+            @RequestParam(required = false) String hallName,
+            @RequestParam Integer year,
+            @RequestParam Integer month) {
+        try {
+            if (year == null || month == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "year and month are required (month: 1-12)"));
+            }
+            if (month < 1 || month > 12) {
+                return ResponseEntity.badRequest().body(Map.of("error", "month must be between 1 and 12"));
+            }
+
+            LocalDate start = LocalDate.of(year, month, 1);
+            LocalDate end = start.withDayOfMonth(start.lengthOfMonth());
+
+            // load all seminars once and filter in-memory (keeps existing service unchanged)
+            List<Seminar> all = seminarService.getAllSeminars();
+
+            // if hallName filter provided, normalise
+            String hallNameNorm = (hallName == null || hallName.isBlank()) ? null : hallName.trim();
+
+            // Build a map date -> count
+            Map<LocalDate, Integer> counts = new HashMap<>();
+
+            // iterate all seminars and mark affected dates
+            for (Seminar s : all) {
+                // filter by hallName if requested
+                if (hallNameNorm != null) {
+                    if (s.getHallName() == null || !s.getHallName().equalsIgnoreCase(hallNameNorm)) {
+                        continue;
+                    }
+                }
+
+                // 1) exact date bookings (time bookings)
+                if (s.getDate() != null) {
+                    try {
+                        LocalDate d = LocalDate.parse(s.getDate(), DATE_FMT);
+                        if (!d.isBefore(start) && !d.isAfter(end)) {
+                            counts.put(d, counts.getOrDefault(d, 0) + 1);
+                        }
+                    } catch (Exception ex) {
+                        // ignore malformed dates
+                    }
+                }
+
+                // 2) day-range bookings (startDate..endDate)
+                if (s.getStartDate() != null && s.getEndDate() != null) {
+                    try {
+                        LocalDate sd = LocalDate.parse(s.getStartDate(), DATE_FMT);
+                        LocalDate ed = LocalDate.parse(s.getEndDate(), DATE_FMT);
+                        // compute overlap with requested month
+                        LocalDate from = sd.isBefore(start) ? start : sd;
+                        LocalDate to = ed.isAfter(end) ? end : ed;
+                        if (!to.isBefore(from)) {
+                            LocalDate curr = from;
+                            while (!curr.isAfter(to)) {
+                                counts.put(curr, counts.getOrDefault(curr, 0) + 1);
+                                curr = curr.plusDays(1);
+                            }
+                        }
+                    } catch (Exception ex) {
+                        // ignore malformed
+                    }
+                }
+
+                // 3) daySlots map (specific dates inside a day-range)
+                if (s.getDaySlots() != null && !s.getDaySlots().isEmpty()) {
+                    for (String key : s.getDaySlots().keySet()) {
+                        try {
+                            LocalDate d = LocalDate.parse(key, DATE_FMT);
+                            if (!d.isBefore(start) && !d.isAfter(end)) {
+                                counts.put(d, counts.getOrDefault(d, 0) + 1);
+                            }
+                        } catch (Exception ex) {
+                            // ignore malformed keys
+                        }
+                    }
+                }
+            }
+
+            // Build result list for all days in month
+            List<CalendarDaySummary> result = new ArrayList<>();
+            LocalDate cursor = start;
+            while (!cursor.isAfter(end)) {
+                int c = counts.getOrDefault(cursor, 0);
+                boolean free = c == 0;
+                result.add(new CalendarDaySummary(cursor, free, c));
+                cursor = cursor.plusDays(1);
+            }
+
+            return ResponseEntity.ok(result);
+        } catch (Exception ex) {
+            log.error("[SeminarController] getCalendarMonthSummary error: {}", ex.getMessage(), ex);
+            return ResponseEntity.status(500).body(Map.of("error", "Server error"));
+        }
+    }
+
+    /**
+     * Returns detailed list of seminars for a date (optional hallName filter).
+     * Example: GET /api/seminars/day/2025-10-15?hallName=Main+Hall
+     */
+    @GetMapping("/day/{date}")
+    public ResponseEntity<?> getSeminarsForDay(
+            @PathVariable String date,
+            @RequestParam(required = false) String hallName) {
+        try {
+            if (hallName != null && !hallName.isBlank()) {
+                // reuse existing service method
+                List<Seminar> res = seminarService.getByHallAndDate(date, hallName);
+                return ResponseEntity.ok(res);
+            } else {
+                List<Seminar> res = seminarService.getSeminarsByDate(date);
+                return ResponseEntity.ok(res);
+            }
+        } catch (Exception ex) {
+            log.error("[SeminarController] getSeminarsForDay error: {}", ex.getMessage(), ex);
+            return ResponseEntity.status(500).body(Map.of("error", "Server error"));
+        }
+    }
+    // ----------------- end calendar endpoints -----------------
 
     @PutMapping("/{id}")
     public ResponseEntity<?> updateSeminar(
@@ -340,5 +475,45 @@ public class SeminarController {
                 }
             }
         });
+    }
+
+    // -------------------- small DTO used for calendar responses --------------------
+    // kept as static inner class to avoid adding extra file; can be moved to payload/ later.
+    public static class CalendarDaySummary {
+        private String date;
+        private boolean free;
+        private int bookingCount;
+
+        public CalendarDaySummary() {}
+
+        public CalendarDaySummary(LocalDate date, boolean free, int bookingCount) {
+            this.date = date.format(DATE_FMT);
+            this.free = free;
+            this.bookingCount = bookingCount;
+        }
+
+        public String getDate() {
+            return date;
+        }
+
+        public void setDate(String date) {
+            this.date = date;
+        }
+
+        public boolean isFree() {
+            return free;
+        }
+
+        public void setFree(boolean free) {
+            this.free = free;
+        }
+
+        public int getBookingCount() {
+            return bookingCount;
+        }
+
+        public void setBookingCount(int bookingCount) {
+            this.bookingCount = bookingCount;
+        }
     }
 }
