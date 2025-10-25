@@ -361,4 +361,78 @@ public class EmailService {
         String t = e.trim();
         return !t.isEmpty() && t.contains("@") && t.length() <= 254;
     }
+
+    // -------------------- New Feature: Welcome email for new Hall Operator --------------------
+    @Async
+    public CompletableFuture<Boolean> sendWelcomeEmailForOperator(HallOperator operator) {
+        if (operator == null || !validEmail(operator.getHeadEmail())) return done(false);
+        String to = operator.getHeadEmail();
+        String name = operator.getHeadName() == null ? "Operator" : operator.getHeadName();
+
+        String subject = "Welcome as Hall Operator — " + companyName;
+
+        StringBuilder html = new StringBuilder();
+        html.append("<html><body style='font-family:Arial,Helvetica,sans-serif;padding:18px;color:#111;'>")
+                .append("<div style='max-width:720px;margin:0 auto;border:1px solid #eaeaea;padding:18px;border-radius:8px;'>")
+                .append("<h2 style='color:#0b5ed7;'>Welcome to ").append(escape(companyName)).append("</h2>")
+                .append("<p>Hello ").append(escape(name)).append(",</p>")
+                .append("<p>You have been successfully added as a Hall Operator.</p>")
+                .append("<p><strong>Assigned Halls:</strong></p><ul>");
+
+        if (operator.getHallNames() != null && !operator.getHallNames().isEmpty()) {
+            for (String hall : operator.getHallNames()) {
+                html.append("<li>").append(escape(hall)).append("</li>");
+            }
+        } else {
+            html.append("<li>No halls assigned yet</li>");
+        }
+
+        html.append("</ul>")
+                .append("<p>You will receive notifications whenever a seminar booking is made in your assigned halls.</p>")
+                .append("<p>Access the admin portal here: <a href='").append(websiteUrl).append("'>").append(websiteUrl).append("</a></p>")
+                .append(footerHtml())
+                .append("</div></body></html>");
+
+        boolean ok = brevoClient.sendEmail(companyName, mailFrom, List.of(to), subject, html.toString());
+        logger.info("[EmailService] sendWelcomeEmailForOperator -> {} for {}", ok, to);
+        return done(ok);
+    }
+
+    // -------------------- New Feature: Notify all hall operators on booking --------------------
+    @Async
+    public CompletableFuture<Boolean> notifyOperatorBookingEmail(List<HallOperator> operators, Seminar seminar) {
+        if (operators == null || operators.isEmpty() || seminar == null) return done(false);
+
+        String subject = "New Seminar Booking — " + safe(seminar.getHallName());
+        StringBuilder html = new StringBuilder();
+
+        html.append("<html><body style='font-family:Arial,Helvetica,sans-serif;padding:18px;color:#111;'>")
+                .append("<div style='max-width:720px;margin:0 auto;border:1px solid #eaeaea;padding:18px;border-radius:8px;'>")
+                .append("<h2 style='color:#0b5ed7;'>New Booking Created</h2>")
+                .append("<p>A new seminar booking has been made. Details below:</p>")
+                .append("<table style='width:100%;border-collapse:collapse;'>")
+                .append(rowTd("Hall", safe(seminar.getHallName())))
+                .append(rowTd("Date", safe(seminar.getDate())))
+                .append(rowTd("Slot", safe(seminar.getSlot())))
+                .append(rowTd("Event", safe(seminar.getSlotTitle())))
+                .append(rowTd("Booked By", safe(seminar.getBookingName()) + " (" + safe(seminar.getEmail()) + ")"))
+                .append("</table>")
+                .append("<p>Please review this booking in your operator dashboard or coordinate as necessary.</p>")
+                .append(footerHtml())
+                .append("</div></body></html>");
+
+        // collect all valid operator emails
+        List<String> emails = operators.stream()
+                .map(HallOperator::getHeadEmail)
+                .filter(this::validEmail)
+                .toList();
+
+        if (emails.isEmpty()) return done(false);
+
+        boolean ok = brevoClient.sendEmail(companyName, mailFrom, emails, subject, html.toString());
+        logger.info("[EmailService] notifyOperatorBookingEmail -> sent to {} operators", emails.size());
+        return done(ok);
+    }
+
+
 }

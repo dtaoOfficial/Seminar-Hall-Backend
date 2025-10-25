@@ -64,4 +64,10 @@ public class HallOperatorController {
     public ResponseEntity<?> findByHall(@RequestParam String hallName) {
         return ResponseEntity.ok(hallOperatorService.findByHallName(hallName));
     }
+    @GetMapping("/check-email")
+    public ResponseEntity<?> checkEmail(@RequestParam String email) {
+        boolean exists = hallOperatorService.emailExists(email);
+        return ResponseEntity.ok(Map.of("exists", exists));
+    }
+
 }

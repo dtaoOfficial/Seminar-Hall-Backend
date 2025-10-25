@@ -1,24 +1,33 @@
 package com.dtao.seminarbooking.model;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
+
+import java.util.ArrayList;
+import java.util.List;
 
 @Document(collection = "hall_operators")
 public class HallOperator {
     @Id
     private String id;
 
-    private String hallId;
-    private String hallName;
+    // Each operator can manage multiple halls
+    private List<String> hallIds = new ArrayList<>();
+    private List<String> hallNames = new ArrayList<>();
+
     private String headName;
+
+    @Indexed(unique = true) // ensures one operator per unique email
     private String headEmail;
+
     private String phone;
 
     public HallOperator() {}
 
-    public HallOperator(String hallId, String hallName, String headName, String headEmail, String phone) {
-        this.hallId = hallId;
-        this.hallName = hallName;
+    public HallOperator(List<String> hallIds, List<String> hallNames, String headName, String headEmail, String phone) {
+        this.hallIds = hallIds;
+        this.hallNames = hallNames;
         this.headName = headName;
         this.headEmail = headEmail;
         this.phone = phone;
@@ -27,11 +36,11 @@ public class HallOperator {
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
-    public String getHallId() { return hallId; }
-    public void setHallId(String hallId) { this.hallId = hallId; }
+    public List<String> getHallIds() { return hallIds; }
+    public void setHallIds(List<String> hallIds) { this.hallIds = hallIds; }
 
-    public String getHallName() { return hallName; }
-    public void setHallName(String hallName) { this.hallName = hallName; }
+    public List<String> getHallNames() { return hallNames; }
+    public void setHallNames(List<String> hallNames) { this.hallNames = hallNames; }
 
     public String getHeadName() { return headName; }
     public void setHeadName(String headName) { this.headName = headName; }
