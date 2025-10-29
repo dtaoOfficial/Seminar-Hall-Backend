@@ -43,11 +43,13 @@ public class SecurityConfig {
     @Value("${cors.allowed-origins:http://localhost:3000}")
     private String corsAllowedOrigins;
 
+    // ✅ BCrypt for strong password hashing
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
+    // ✅ Authentication provider (DAO pattern)
     @Bean
     public DaoAuthenticationProvider authProvider() {
         DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
@@ -61,6 +63,7 @@ public class SecurityConfig {
         return config.getAuthenticationManager();
     }
 
+    // ✅ CORS config with controlled origins
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
@@ -71,20 +74,21 @@ public class SecurityConfig {
                 .collect(Collectors.toList());
 
         configuration.setAllowedOrigins(origins);
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Requested-With"));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
         configuration.setExposedHeaders(List.of("Authorization", "Content-Disposition"));
         configuration.setAllowCredentials(true);
-        configuration.setMaxAge(3600L);
+        configuration.setMaxAge(3600L); // cache pre-flight requests
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
 
+    // ✅ MAIN SECURITY CHAIN
     @Bean
-    public SecurityFilterChain securityFilterChain(
-            org.springframework.security.config.annotation.web.builders.HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(org.springframework.security.config.annotation.web.builders.HttpSecurity http)
+            throws Exception {
 
         http
                 .csrf(csrf -> csrf.disable())
@@ -93,52 +97,53 @@ public class SecurityConfig {
                 .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
 
-                        // ✅ Public endpoints (added /api/health)
+                        // ✅ Public endpoints
                         .requestMatchers("/api/health").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/users/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/users").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                        // Seminar read
+                        // ✅ Seminar endpoints
                         .requestMatchers(HttpMethod.GET, "/api/seminars/**").hasAnyRole("ADMIN", "DEPARTMENT")
-
-                        // Seminar cancel actions
-                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/cancel-request").hasAnyRole("DEPARTMENT","ADMIN")
-                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/confirm-cancel").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/reject-cancel").hasRole("ADMIN")
-
-                        // Seminar create
                         .requestMatchers(HttpMethod.POST, "/api/seminars/**").hasAnyRole("ADMIN", "DEPARTMENT")
 
-                        // Seminar update/delete
+                        // ✅ Only Admin can modify or delete seminars
+                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/confirm-cancel").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/reject-cancel").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/seminars/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/seminars/**").hasRole("ADMIN")
 
-                        // Booking requests
+                        // ✅ Cancel request allowed by both
+                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/cancel-request").hasAnyRole("DEPARTMENT","ADMIN")
+
+                        // ✅ Requests
                         .requestMatchers(HttpMethod.POST, "/api/requests/**").hasRole("DEPARTMENT")
                         .requestMatchers(HttpMethod.GET, "/api/requests/**").hasAnyRole("ADMIN", "DEPARTMENT")
                         .requestMatchers(HttpMethod.PUT, "/api/requests/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/requests/**").hasRole("ADMIN")
 
-                        // Departments
+                        // ✅ Departments
                         .requestMatchers(HttpMethod.GET, "/api/departments/**").hasAnyRole("ADMIN","DEPARTMENT")
                         .requestMatchers(HttpMethod.POST, "/api/departments/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/departments/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/departments/**").hasRole("ADMIN")
 
-                        // Halls
+                        // ✅ Halls
                         .requestMatchers(HttpMethod.GET, "/api/halls/**").hasAnyRole("ADMIN","DEPARTMENT")
                         .requestMatchers(HttpMethod.POST, "/api/halls/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/halls/*/media").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/halls/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/halls/**").hasRole("ADMIN")
 
-                        // Everything else requires authentication
+                        // ✅ Any other request requires authentication
                         .anyRequest().authenticated()
                 );
 
+        // ✅ Add JWT filter before username/password filter
         http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+
+        // ✅ Use custom auth provider
         http.authenticationProvider(authProvider());
 
         return http.build();
