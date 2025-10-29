@@ -41,4 +41,18 @@ public interface SeminarRepository extends MongoRepository<Seminar, String> {
             String startDate,
             String endDate
     );
+
+    // ✅ Department-based calendar lookups
+    List<Seminar> findByDepartmentAndDateBetween(
+            String department,
+            String startDate,
+            String endDate
+    );
+
+    List<Seminar> findByDepartmentAndStartDateLessThanEqualAndEndDateGreaterThanEqual(
+            String department,
+            String startDate,
+            String endDate
+    );
+
 }

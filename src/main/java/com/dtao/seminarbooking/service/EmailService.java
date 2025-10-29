@@ -99,20 +99,23 @@ public class EmailService {
 
         if (isApproved) {
             html.append("<div style='background:#e9f7ef;border:1px solid #c7efd3;padding:10px;border-radius:6px;margin-bottom:12px'>")
-                    .append("<strong style='color:#2f8a4b'>Approved & applied by admin</strong>")
+                    .append("<strong style='color:#2f8a4b'>Approved by Administrator</strong>")
                     .append("<div style='font-size:13px;color:#444;margin-top:6px'>Your booking has been approved by the administrator.</div>")
                     .append("</div>");
         }
 
-        html.append("<h2 style='color:#0b5ed7'>Seminar Booking Received</h2>")
+        html.append("<h2 style='color:#0b5ed7;margin-top:0;'>Seminar Booking Received</h2>")
                 .append("<p>Dear ").append(escape(s.getBookingName() == null ? "User" : s.getBookingName())).append(",</p>")
                 .append("<p>Your booking request has been successfully received. Details below:</p>")
-                .append("<table style='width:100%;border-collapse:collapse'>")
+                .append("<table style='width:100%;border-collapse:collapse;margin-top:10px;'>")
                 .append(rowTd("Hall", safe(s.getHallName())))
                 .append(rowTd("Date", safe(s.getDate())))
-                .append(rowTd("Slot", safe(s.getSlot())))
+                .append(rowTd("Start Time", safe(s.getStartTime())))
+                .append(rowTd("End Time", safe(s.getEndTime())))
                 .append(rowTd("Event", safe(s.getSlotTitle())))
-                .append(rowTd("Department / Contact", safe(s.getDepartment()) + " / " + safe(s.getPhone())))
+                .append(rowTd("Department", safe(s.getDepartment())))
+                .append(rowTd("Contact", safe(s.getPhone())))
+                .append(rowTd("Email", safe(s.getEmail())))
                 .append("</table>");
 
         if (isApproved)
@@ -144,7 +147,8 @@ public class EmailService {
                 .append("<table style='width:100%;border-collapse:collapse'>")
                 .append(rowTd("Hall", safe(s.getHallName())))
                 .append(rowTd("Date", safe(s.getDate())))
-                .append(rowTd("Slot", safe(s.getSlot())))
+                .append(rowTd("Start Time", safe(s.getStartTime())))
+                .append(rowTd("End Time", safe(s.getEndTime())))
                 .append(rowTd("Event", safe(s.getSlotTitle())))
                 .append("</table>")
                 .append("<p>If you have questions, please contact your department or the college administration.</p>")
@@ -184,15 +188,18 @@ public class EmailService {
 
         String html = "<html><body style='font-family:Arial,Helvetica,sans-serif;padding:14px;color:#111'>"
                 + "<div style='max-width:720px;margin:0 auto;border:1px solid #eaeaea;padding:16px;border-radius:8px'>"
-                + "<h2 style='color:#0b5ed7'>New Booking Request</h2>"
+                + "<h2 style='color:#0b5ed7;margin-top:0;'>New Booking Request</h2>"
                 + "<p>Hello " + escape(head.getHeadName()) + ",</p>"
                 + "<p>A new booking has been created for your hall. Details:</p>"
-                + "<table style='width:100%;border-collapse:collapse'>"
+                + "<table style='width:100%;border-collapse:collapse;margin-top:10px;'>"
                 + rowTd("Hall", safe(s.getHallName()))
                 + rowTd("Date", safe(s.getDate()))
-                + rowTd("Slot", safe(s.getSlot()))
+                + rowTd("Start Time", safe(s.getStartTime()))
+                + rowTd("End Time", safe(s.getEndTime()))
                 + rowTd("Event", safe(s.getSlotTitle()))
-                + rowTd("Booked by", safe(s.getBookingName()) + " (" + safe(s.getEmail()) + ")")
+                + rowTd("Booked By", safe(s.getBookingName()) + " (" + safe(s.getEmail()) + ")")
+                + rowTd("Department", safe(s.getDepartment()))
+                + rowTd("Contact", safe(s.getPhone()))
                 + rowTd("Location", "Seminar Hall Block A, New Horizon College (please coordinate internally)")
                 + "</table>"
                 + "<p>Please coordinate with the requester as needed. You may view full details in the admin portal.</p>"
@@ -218,7 +225,8 @@ public class EmailService {
                 .append("<table style='width:100%;border-collapse:collapse'>")
                 .append(rowTd("Hall", safe(s.getHallName())))
                 .append(rowTd("Date", safe(s.getDate())))
-                .append(rowTd("Slot", safe(s.getSlot())))
+                .append(rowTd("Start Time", safe(s.getStartTime())))
+                .append(rowTd("End Time", safe(s.getEndTime())))
                 .append(rowTd("Event", safe(s.getSlotTitle())))
                 .append(rowTd("Booked by", safe(s.getBookingName()) + " (" + safe(s.getEmail()) + ")"))
                 .append(rowTd("Location", "Seminar Hall Block A, New Horizon College"));
@@ -245,7 +253,8 @@ public class EmailService {
                 .append("<table style='width:100%;border-collapse:collapse'>")
                 .append(rowTd("Hall", safe(s.getHallName())))
                 .append(rowTd("Date", safe(s.getDate())))
-                .append(rowTd("Slot", safe(s.getSlot())))
+                .append(rowTd("Start Time", safe(s.getStartTime())))
+                .append(rowTd("End Time", safe(s.getEndTime())))
                 .append(rowTd("Event", safe(s.getSlotTitle())))
                 .append(rowTd("Booked by", safe(s.getBookingName()) + " (" + safe(s.getEmail()) + ")"));
         if (reason != null && !reason.isBlank()) html.append(rowTd("Reason", escape(reason)));
@@ -271,7 +280,8 @@ public class EmailService {
                 .append("<table style='width:100%;border-collapse:collapse'>")
                 .append(rowTd("Hall", safe(s.getHallName())))
                 .append(rowTd("Date", safe(s.getDate())))
-                .append(rowTd("Slot", safe(s.getSlot())))
+                .append(rowTd("Start Time", safe(s.getStartTime())))
+                .append(rowTd("End Time", safe(s.getEndTime())))
                 .append(rowTd("Event", safe(s.getSlotTitle())));
         if (reason != null && !reason.isBlank()) html.append(rowTd("Reason", escape(reason)));
         html.append("</table>").append(footerHtml()).append("</div></body></html>");
@@ -301,8 +311,12 @@ public class EmailService {
                 .append("<table style='width:100%;border-collapse:collapse;margin-top:10px'>")
                 .append(rowTd("Hall", safe(seminar.getHallName())))
                 .append(rowTd("Date", safe(seminar.getDate())))
-                .append(rowTd("Slot", safe(seminar.getSlot())))
+                .append(rowTd("Start Time", safe(seminar.getStartTime())))
+                .append(rowTd("End Time", safe(seminar.getEndTime())))
                 .append(rowTd("Event", safe(seminar.getSlotTitle())))
+                .append(rowTd("Department", safe(seminar.getDepartment())))
+                .append(rowTd("Contact", safe(seminar.getPhone())))
+                .append(rowTd("Email", safe(seminar.getEmail())))
                 .append(rowTd("Status", escape(status)));
         if (reason != null && !reason.isBlank()) html.append(rowTd("Remarks", escape(reason)));
         html.append("</table>").append("<div style='margin-top:14px'>");
@@ -413,9 +427,12 @@ public class EmailService {
                 .append("<table style='width:100%;border-collapse:collapse;'>")
                 .append(rowTd("Hall", safe(seminar.getHallName())))
                 .append(rowTd("Date", safe(seminar.getDate())))
-                .append(rowTd("Slot", safe(seminar.getSlot())))
+                .append(rowTd("Start Time", safe(seminar.getStartTime())))
+                .append(rowTd("End Time", safe(seminar.getEndTime())))
                 .append(rowTd("Event", safe(seminar.getSlotTitle())))
                 .append(rowTd("Booked By", safe(seminar.getBookingName()) + " (" + safe(seminar.getEmail()) + ")"))
+                .append(rowTd("Department", safe(seminar.getDepartment())))
+                .append(rowTd("Contact", safe(seminar.getPhone())))
                 .append("</table>")
                 .append("<p>Please review this booking in your operator dashboard or coordinate as necessary.</p>")
                 .append(footerHtml())
@@ -433,6 +450,5 @@ public class EmailService {
         logger.info("[EmailService] notifyOperatorBookingEmail -> sent to {} operators", emails.size());
         return done(ok);
     }
-
 
 }
