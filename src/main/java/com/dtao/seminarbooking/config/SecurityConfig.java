@@ -43,13 +43,13 @@ public class SecurityConfig {
     @Value("${cors.allowed-origins:http://localhost:3000}")
     private String corsAllowedOrigins;
 
-    // ✅ BCrypt for strong password hashing
+    // ✅ Strong password encoder
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    // ✅ Authentication provider (DAO pattern)
+    // ✅ Authentication provider
     @Bean
     public DaoAuthenticationProvider authProvider() {
         DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
@@ -63,7 +63,7 @@ public class SecurityConfig {
         return config.getAuthenticationManager();
     }
 
-    // ✅ CORS config with controlled origins
+    // ✅ CORS configuration
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
@@ -78,14 +78,14 @@ public class SecurityConfig {
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
         configuration.setExposedHeaders(List.of("Authorization", "Content-Disposition"));
         configuration.setAllowCredentials(true);
-        configuration.setMaxAge(3600L); // cache pre-flight requests
+        configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
 
-    // ✅ MAIN SECURITY CHAIN
+    // ✅ Main security chain
     @Bean
     public SecurityFilterChain securityFilterChain(org.springframework.security.config.annotation.web.builders.HttpSecurity http)
             throws Exception {
@@ -104,7 +104,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/users").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                        // ✅ Seminar endpoints
+                        // ✅ Seminar endpoints (added both /api/seminars and /api/seminars/**)
+                        .requestMatchers(HttpMethod.GET, "/api/seminars").hasAnyRole("ADMIN", "DEPARTMENT")
                         .requestMatchers(HttpMethod.GET, "/api/seminars/**").hasAnyRole("ADMIN", "DEPARTMENT")
                         .requestMatchers(HttpMethod.POST, "/api/seminars/**").hasAnyRole("ADMIN", "DEPARTMENT")
 
@@ -115,35 +116,37 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.DELETE, "/api/seminars/**").hasRole("ADMIN")
 
                         // ✅ Cancel request allowed by both
-                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/cancel-request").hasAnyRole("DEPARTMENT","ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/seminars/*/cancel-request").hasAnyRole("DEPARTMENT", "ADMIN")
 
-                        // ✅ Requests
-                        .requestMatchers(HttpMethod.POST, "/api/requests/**").hasRole("DEPARTMENT")
+                        // ✅ Requests (added /api/requests and /api/requests/**)
+                        .requestMatchers(HttpMethod.GET, "/api/requests").hasAnyRole("ADMIN", "DEPARTMENT")
                         .requestMatchers(HttpMethod.GET, "/api/requests/**").hasAnyRole("ADMIN", "DEPARTMENT")
+                        .requestMatchers(HttpMethod.POST, "/api/requests/**").hasRole("DEPARTMENT")
                         .requestMatchers(HttpMethod.PUT, "/api/requests/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/requests/**").hasRole("ADMIN")
 
                         // ✅ Departments
-                        .requestMatchers(HttpMethod.GET, "/api/departments/**").hasAnyRole("ADMIN","DEPARTMENT")
+                        .requestMatchers(HttpMethod.GET, "/api/departments/**").hasAnyRole("ADMIN", "DEPARTMENT")
                         .requestMatchers(HttpMethod.POST, "/api/departments/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/departments/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/departments/**").hasRole("ADMIN")
 
                         // ✅ Halls
-                        .requestMatchers(HttpMethod.GET, "/api/halls/**").hasAnyRole("ADMIN","DEPARTMENT")
+                        .requestMatchers(HttpMethod.GET, "/api/halls").hasAnyRole("ADMIN", "DEPARTMENT")
+                        .requestMatchers(HttpMethod.GET, "/api/halls/**").hasAnyRole("ADMIN", "DEPARTMENT")
                         .requestMatchers(HttpMethod.POST, "/api/halls/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/halls/*/media").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/halls/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/halls/**").hasRole("ADMIN")
 
-                        // ✅ Any other request requires authentication
+                        // ✅ Any other request must be authenticated
                         .anyRequest().authenticated()
                 );
 
         // ✅ Add JWT filter before username/password filter
         http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
-        // ✅ Use custom auth provider
+        // ✅ Use custom DAO provider
         http.authenticationProvider(authProvider());
 
         return http.build();

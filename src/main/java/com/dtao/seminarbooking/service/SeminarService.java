@@ -451,4 +451,9 @@ public class SeminarService {
         int m = Integer.parseInt(parts[1]);
         return h * 60 + m;
     }
+
+    public List<Seminar> getByStatus(String status) {
+        return seminarRepository.findByStatusIgnoreCase(status);
+    }
+
 }

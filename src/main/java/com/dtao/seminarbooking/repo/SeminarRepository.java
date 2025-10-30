@@ -54,5 +54,6 @@ public interface SeminarRepository extends MongoRepository<Seminar, String> {
             String startDate,
             String endDate
     );
+    List<Seminar> findByStatusIgnoreCase(String status);
 
 }
