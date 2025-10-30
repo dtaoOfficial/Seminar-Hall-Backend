@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -31,6 +32,9 @@ public class SeminarService {
             Pattern.compile("^[6-9][0-9]{9}$");
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ISO_LOCAL_DATE;
+
+    // NEW: Maximum number of days allowed for a day-range booking (inclusive)
+    private static final long MAX_BOOKING_DAYS = 7L;
 
     // -------------------------
     // Add seminar
@@ -417,18 +421,449 @@ public class SeminarService {
         }
     }
 
+    // -------------------------
     // Check conflicts for ADD
+    // -------------------------
     private void checkTimeConflictsForAdd(Seminar seminar) {
-        // ... (unchanged) existing implementation copied from original file
-        // Keep your existing logic as-is (omitted here for brevity in this snippet)
-        // The full original implementation remains in your file.
+        LocalDate today = LocalDate.now();
+
+        String hall = seminar.getHallName() == null ? "" : seminar.getHallName().trim();
+
+        // Hall required guard (edge-case handling)
+        if (hall.isBlank()) {
+            throw new RuntimeException("Hall name is required for booking.");
+        }
+
+        // ---- Time booking (single date + startTime/endTime) ----
+        if (seminar.getDate() != null) {
+            LocalDate bookingDate;
+            try {
+                bookingDate = LocalDate.parse(seminar.getDate(), DATE_FMT);
+            } catch (DateTimeParseException ex) {
+                throw new RuntimeException("Invalid booking date format");
+            }
+            if (bookingDate.isBefore(today)) {
+                throw new RuntimeException("Cannot book a seminar in the past. Please select a future date.");
+            }
+
+            // fetch existing time bookings for same hall+date (or all if no hall)
+            List<Seminar> existingTimeBookings;
+            try {
+                existingTimeBookings = seminarRepository.findByDateAndHallName(seminar.getDate(), hall);
+            } catch (Exception ex) {
+                existingTimeBookings = seminarRepository.findAll().stream()
+                        .filter(s -> s.getDate() != null && s.getDate().equals(seminar.getDate())
+                                && s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                        .collect(Collectors.toList());
+            }
+
+            // Check overlap with existing time bookings
+            for (Seminar existing : existingTimeBookings) {
+                if (existing == null) continue;
+                if (existing.getStartTime() != null && existing.getEndTime() != null) {
+                    if (isOverlapping(seminar.getStartTime(), seminar.getEndTime(), existing.getStartTime(), existing.getEndTime())) {
+                        throw new RuntimeException("⚠️ Time slot overlaps another booking on " + seminar.getDate());
+                    }
+                } else {
+                    // If existing is a day-range/full-day booking that also covers this date -> conflict
+                    if (existing.getStartDate() != null && existing.getEndDate() != null) {
+                        try {
+                            LocalDate sd = LocalDate.parse(existing.getStartDate(), DATE_FMT);
+                            LocalDate ed = LocalDate.parse(existing.getEndDate(), DATE_FMT);
+                            if (!bookingDate.isBefore(sd) && !bookingDate.isAfter(ed)) {
+                                throw new RuntimeException("❌ This day is already booked in " + existing.getHallName() + ". Please choose another date.");
+                            }
+                        } catch (DateTimeParseException ignore) {}
+                    }
+                }
+            }
+
+            // Also check day-range bookings whose range covers this date (same hall)
+            List<Seminar> dayRangeBookings;
+            try {
+                dayRangeBookings = seminarRepository.findByHallNameAndStartDateLessThanEqualAndEndDateGreaterThanEqual(hall, seminar.getDate(), seminar.getDate());
+            } catch (Exception ex) {
+                dayRangeBookings = seminarRepository.findAll().stream()
+                        .filter(s -> s.getStartDate() != null && s.getEndDate() != null
+                                && s.getStartDate().compareTo(seminar.getDate()) <= 0
+                                && s.getEndDate().compareTo(seminar.getDate()) >= 0
+                                && s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                        .collect(Collectors.toList());
+            }
+
+            if (!dayRangeBookings.isEmpty()) {
+                throw new RuntimeException("❌ This day is already booked in " + hall + ". Please choose another date.");
+            }
+
+            // Also check daySlots map entries for same date
+            List<Seminar> daySlotsContainingDate = seminarRepository.findAll().stream()
+                    .filter(s -> s.getDaySlots() != null && s.getDaySlots().containsKey(seminar.getDate()))
+                    .filter(s -> s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                    .collect(Collectors.toList());
+            if (!daySlotsContainingDate.isEmpty()) {
+                throw new RuntimeException("❌ This day is already booked (daySlots) in " + hall + ". Please choose another date.");
+            }
+        }
+
+        // ---- Day-range booking (startDate..endDate) ----
+        if (seminar.getStartDate() != null && seminar.getEndDate() != null) {
+            LocalDate start;
+            LocalDate end;
+            try {
+                start = LocalDate.parse(seminar.getStartDate(), DATE_FMT);
+                end = LocalDate.parse(seminar.getEndDate(), DATE_FMT);
+            } catch (DateTimeParseException ex) {
+                throw new RuntimeException("Invalid startDate/endDate format");
+            }
+
+            if (start.isBefore(today)) {
+                throw new RuntimeException("Start date cannot be in the past. Please select future dates.");
+            }
+
+            long daysBetween = ChronoUnit.DAYS.between(start, end) + 1; // inclusive
+            if (daysBetween > MAX_BOOKING_DAYS) {
+                throw new RuntimeException("Maximum booking duration is " + MAX_BOOKING_DAYS + " days. Please choose a shorter range.");
+            }
+
+            // Build list of dates to check
+            List<LocalDate> datesToCheck = new ArrayList<>();
+            LocalDate cur = start;
+            while (!cur.isAfter(end)) {
+                datesToCheck.add(cur);
+                cur = cur.plusDays(1);
+            }
+
+            // If a daySlots map exists for this seminar, it still counts as day-range reservation for those keys
+            Map<String, DaySlot> requestedDaySlots = seminar.getDaySlots();
+
+            // Fetch potentially conflicting seminars for this hall (narrow with repo if possible)
+            List<Seminar> candidates;
+            try {
+                candidates = seminarRepository.findByHallNameAndStartDateLessThanEqualAndEndDateGreaterThanEqual(hall, seminar.getEndDate(), seminar.getStartDate());
+            } catch (Exception ex) {
+                candidates = seminarRepository.findAll().stream()
+                        .filter(s -> s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                        .collect(Collectors.toList());
+            }
+
+            for (Seminar existing : candidates) {
+                if (existing == null) continue;
+
+                // 1) existing day-range overlapping any date
+                if (existing.getStartDate() != null && existing.getEndDate() != null) {
+                    try {
+                        LocalDate es = LocalDate.parse(existing.getStartDate(), DATE_FMT);
+                        LocalDate ee = LocalDate.parse(existing.getEndDate(), DATE_FMT);
+                        // overlap if ranges intersect
+                        if (!(end.isBefore(es) || start.isAfter(ee))) {
+                            throw new RuntimeException("📅 Some days in this range are already booked for " + existing.getHallName());
+                        }
+                    } catch (DateTimeParseException ignore) {}
+                }
+
+                // 2) existing time-booking on any date in our range
+                if (existing.getDate() != null) {
+                    try {
+                        LocalDate edate = LocalDate.parse(existing.getDate(), DATE_FMT);
+                        if (!edate.isBefore(start) && !edate.isAfter(end)) {
+                            // if existing is a time booking, that means the day is already partially booked -> conflict with range or full-day
+                            throw new RuntimeException("❌ This day (" + existing.getDate() + ") is already booked in " + existing.getHallName() + ". Please choose another date or adjust times.");
+                        }
+                    } catch (DateTimeParseException ignore) {}
+                }
+
+                // 3) existing daySlots that fall inside our requested range
+                if (existing.getDaySlots() != null && !existing.getDaySlots().isEmpty()) {
+                    for (String key : existing.getDaySlots().keySet()) {
+                        try {
+                            LocalDate dkey = LocalDate.parse(key, DATE_FMT);
+                            if (!dkey.isBefore(start) && !dkey.isAfter(end)) {
+                                throw new RuntimeException("📅 Some days in this range are already booked for " + existing.getHallName());
+                            }
+                        } catch (DateTimeParseException ignore) {}
+                    }
+                }
+            }
+
+            // Additionally, if request has daySlots for specific days, ensure each requested day slot doesn't conflict with time bookings or existing daySlots
+            if (requestedDaySlots != null && !requestedDaySlots.isEmpty()) {
+                for (Map.Entry<String, DaySlot> e : requestedDaySlots.entrySet()) {
+                    String key = e.getKey();
+                    DaySlot slot = e.getValue();
+                    LocalDate d;
+                    try {
+                        d = LocalDate.parse(key, DATE_FMT);
+                    } catch (DateTimeParseException ex) {
+                        throw new RuntimeException("daySlots key is not a valid date: " + key);
+                    }
+
+                    if (d.isBefore(start) || d.isAfter(end)) {
+                        throw new RuntimeException("daySlots contains a date outside startDate..endDate: " + key);
+                    }
+
+                    // check time overlap with existing time bookings for that date
+                    List<Seminar> timeOnDate;
+                    try {
+                        timeOnDate = seminarRepository.findByDateAndHallName(key, hall);
+                    } catch (Exception ex) {
+                        timeOnDate = seminarRepository.findAll().stream()
+                                .filter(s -> s.getDate() != null && s.getDate().equals(key)
+                                        && s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                                .collect(Collectors.toList());
+                    }
+
+                    for (Seminar t : timeOnDate) {
+                        if (t.getStartTime() != null && t.getEndTime() != null && slot != null) {
+                            if (isOverlapping(slot.getStartTime(), slot.getEndTime(), t.getStartTime(), t.getEndTime())) {
+                                throw new RuntimeException("⚠️ Time slot overlaps another booking on " + key);
+                            }
+                        }
+                    }
+
+                    // also check existing daySlots on same date
+                    List<Seminar> existingDaySlots = seminarRepository.findAll().stream()
+                            .filter(s -> s.getDaySlots() != null && s.getDaySlots().containsKey(key))
+                            .filter(s -> s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                            .collect(Collectors.toList());
+                    if (!existingDaySlots.isEmpty()) {
+                        throw new RuntimeException("❌ This day is already booked (daySlots) in " + hall + ". Please choose another date.");
+                    }
+                }
+            }
+        }
+
+        // ---- Slot-based booking (slot string) -> ensure the day(s) covered by slot are free.
+        // If seminar.slot != null but no dates provided, we leave shape validation to validatePayloadShapeOrThrow
+        // If slot + date provided, we already evaluated time booking branch above.
     }
 
+    // -------------------------
     // Check conflicts for UPDATE (ignore itself)
+    // -------------------------
     private void checkTimeConflictsForUpdate(Seminar seminar, String id) {
-        // ... (unchanged) existing implementation copied from original file
-        // Keep your existing logic as-is (omitted here for brevity in this snippet)
-        // The full original implementation remains in your file.
+        // Reuse add logic but exclude the seminar with the same id from comparisons.
+        // We'll follow same checks as for add, but filter out the existing record id.
+
+        LocalDate today = LocalDate.now();
+
+        String hall = seminar.getHallName() == null ? "" : seminar.getHallName().trim();
+
+        // Hall required guard (edge-case handling)
+        if (hall.isBlank()) {
+            throw new RuntimeException("Hall name is required for booking.");
+        }
+
+        // Helper to filter out same id
+        java.util.function.Predicate<Seminar> notSameId = s -> s != null && s.getId() != null && !s.getId().equals(id);
+
+        // ---- Time booking (single date + startTime/endTime) ----
+        if (seminar.getDate() != null) {
+            LocalDate bookingDate;
+            try {
+                bookingDate = LocalDate.parse(seminar.getDate(), DATE_FMT);
+            } catch (DateTimeParseException ex) {
+                throw new RuntimeException("Invalid booking date format");
+            }
+            if (bookingDate.isBefore(today)) {
+                throw new RuntimeException("Cannot book a seminar in the past. Please select a future date.");
+            }
+
+            // fetch existing time bookings for same hall+date (or all if no hall) and exclude same id
+            List<Seminar> existingTimeBookings;
+            try {
+                existingTimeBookings = seminarRepository.findByDateAndHallName(seminar.getDate(), hall).stream()
+                        .filter(notSameId)
+                        .collect(Collectors.toList());
+            } catch (Exception ex) {
+                existingTimeBookings = seminarRepository.findAll().stream()
+                        .filter(s -> s.getDate() != null && s.getDate().equals(seminar.getDate())
+                                && s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                        .filter(notSameId)
+                        .collect(Collectors.toList());
+            }
+
+            // Check overlap with existing time bookings
+            for (Seminar existing : existingTimeBookings) {
+                if (existing == null) continue;
+                if (existing.getStartTime() != null && existing.getEndTime() != null) {
+                    if (isOverlapping(seminar.getStartTime(), seminar.getEndTime(), existing.getStartTime(), existing.getEndTime())) {
+                        throw new RuntimeException("⚠️ Time slot overlaps another booking on " + seminar.getDate());
+                    }
+                } else {
+                    // If existing is a day-range/full-day booking that also covers this date -> conflict
+                    if (existing.getStartDate() != null && existing.getEndDate() != null) {
+                        try {
+                            LocalDate sd = LocalDate.parse(existing.getStartDate(), DATE_FMT);
+                            LocalDate ed = LocalDate.parse(existing.getEndDate(), DATE_FMT);
+                            if (!bookingDate.isBefore(sd) && !bookingDate.isAfter(ed)) {
+                                throw new RuntimeException("❌ This day is already booked in " + existing.getHallName() + ". Please choose another date.");
+                            }
+                        } catch (DateTimeParseException ignore) {}
+                    }
+                }
+            }
+
+            // Also check day-range bookings whose range covers this date (same hall) excluding same id
+            List<Seminar> dayRangeBookings;
+            try {
+                dayRangeBookings = seminarRepository.findByHallNameAndStartDateLessThanEqualAndEndDateGreaterThanEqual(hall, seminar.getDate(), seminar.getDate()).stream()
+                        .filter(notSameId)
+                        .collect(Collectors.toList());
+            } catch (Exception ex) {
+                dayRangeBookings = seminarRepository.findAll().stream()
+                        .filter(s -> s.getStartDate() != null && s.getEndDate() != null
+                                && s.getStartDate().compareTo(seminar.getDate()) <= 0
+                                && s.getEndDate().compareTo(seminar.getDate()) >= 0
+                                && s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                        .filter(notSameId)
+                        .collect(Collectors.toList());
+            }
+
+            if (!dayRangeBookings.isEmpty()) {
+                throw new RuntimeException("❌ This day is already booked in " + hall + ". Please choose another date.");
+            }
+
+            // Also check daySlots map entries for same date (exclude same id)
+            List<Seminar> daySlotsContainingDate = seminarRepository.findAll().stream()
+                    .filter(s -> s.getDaySlots() != null && s.getDaySlots().containsKey(seminar.getDate()))
+                    .filter(s -> s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                    .filter(notSameId)
+                    .collect(Collectors.toList());
+            if (!daySlotsContainingDate.isEmpty()) {
+                throw new RuntimeException("❌ This day is already booked (daySlots) in " + hall + ". Please choose another date.");
+            }
+        }
+
+        // ---- Day-range booking (startDate..endDate) ----
+        if (seminar.getStartDate() != null && seminar.getEndDate() != null) {
+            LocalDate start;
+            LocalDate end;
+            try {
+                start = LocalDate.parse(seminar.getStartDate(), DATE_FMT);
+                end = LocalDate.parse(seminar.getEndDate(), DATE_FMT);
+            } catch (DateTimeParseException ex) {
+                throw new RuntimeException("Invalid startDate/endDate format");
+            }
+
+            if (start.isBefore(today)) {
+                throw new RuntimeException("Start date cannot be in the past. Please select future dates.");
+            }
+
+            long daysBetween = ChronoUnit.DAYS.between(start, end) + 1; // inclusive
+            if (daysBetween > MAX_BOOKING_DAYS) {
+                throw new RuntimeException("Maximum booking duration is " + MAX_BOOKING_DAYS + " days. Please choose a shorter range.");
+            }
+
+            // Build list of dates to check
+            List<LocalDate> datesToCheck = new ArrayList<>();
+            LocalDate cur = start;
+            while (!cur.isAfter(end)) {
+                datesToCheck.add(cur);
+                cur = cur.plusDays(1);
+            }
+
+            Map<String, DaySlot> requestedDaySlots = seminar.getDaySlots();
+
+            // Fetch potentially conflicting seminars for this hall (narrow with repo if possible)
+            List<Seminar> candidates;
+            try {
+                candidates = seminarRepository.findByHallNameAndStartDateLessThanEqualAndEndDateGreaterThanEqual(hall, seminar.getEndDate(), seminar.getStartDate()).stream()
+                        .filter(notSameId)
+                        .collect(Collectors.toList());
+            } catch (Exception ex) {
+                candidates = seminarRepository.findAll().stream()
+                        .filter(s -> s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                        .filter(notSameId)
+                        .collect(Collectors.toList());
+            }
+
+            for (Seminar existing : candidates) {
+                if (existing == null) continue;
+
+                // 1) existing day-range overlapping any date
+                if (existing.getStartDate() != null && existing.getEndDate() != null) {
+                    try {
+                        LocalDate es = LocalDate.parse(existing.getStartDate(), DATE_FMT);
+                        LocalDate ee = LocalDate.parse(existing.getEndDate(), DATE_FMT);
+                        if (!(end.isBefore(es) || start.isAfter(ee))) {
+                            throw new RuntimeException("📅 Some days in this range are already booked for " + existing.getHallName());
+                        }
+                    } catch (DateTimeParseException ignore) {}
+                }
+
+                // 2) existing time-booking on any date in our range
+                if (existing.getDate() != null) {
+                    try {
+                        LocalDate edate = LocalDate.parse(existing.getDate(), DATE_FMT);
+                        if (!edate.isBefore(start) && !edate.isAfter(end)) {
+                            throw new RuntimeException("❌ This day (" + existing.getDate() + ") is already booked in " + existing.getHallName() + ". Please choose another date or adjust times.");
+                        }
+                    } catch (DateTimeParseException ignore) {}
+                }
+
+                // 3) existing daySlots that fall inside our requested range
+                if (existing.getDaySlots() != null && !existing.getDaySlots().isEmpty()) {
+                    for (String key : existing.getDaySlots().keySet()) {
+                        try {
+                            LocalDate dkey = LocalDate.parse(key, DATE_FMT);
+                            if (!dkey.isBefore(start) && !dkey.isAfter(end)) {
+                                throw new RuntimeException("📅 Some days in this range are already booked for " + existing.getHallName());
+                            }
+                        } catch (DateTimeParseException ignore) {}
+                    }
+                }
+            }
+
+            // validate requested daySlots specifics
+            if (requestedDaySlots != null && !requestedDaySlots.isEmpty()) {
+                for (Map.Entry<String, DaySlot> e : requestedDaySlots.entrySet()) {
+                    String key = e.getKey();
+                    DaySlot slot = e.getValue();
+                    LocalDate d;
+                    try {
+                        d = LocalDate.parse(key, DATE_FMT);
+                    } catch (DateTimeParseException ex) {
+                        throw new RuntimeException("daySlots key is not a valid date: " + key);
+                    }
+
+                    if (d.isBefore(start) || d.isAfter(end)) {
+                        throw new RuntimeException("daySlots contains a date outside startDate..endDate: " + key);
+                    }
+
+                    // check time overlap with existing time bookings for that date (excluding same id)
+                    List<Seminar> timeOnDate;
+                    try {
+                        timeOnDate = seminarRepository.findByDateAndHallName(key, hall).stream()
+                                .filter(notSameId)
+                                .collect(Collectors.toList());
+                    } catch (Exception ex) {
+                        timeOnDate = seminarRepository.findAll().stream()
+                                .filter(s -> s.getDate() != null && s.getDate().equals(key)
+                                        && s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                                .filter(notSameId)
+                                .collect(Collectors.toList());
+                    }
+
+                    for (Seminar t : timeOnDate) {
+                        if (t.getStartTime() != null && t.getEndTime() != null && slot != null) {
+                            if (isOverlapping(slot.getStartTime(), slot.getEndTime(), t.getStartTime(), t.getEndTime())) {
+                                throw new RuntimeException("⚠️ Time slot overlaps another booking on " + key);
+                            }
+                        }
+                    }
+
+                    // also check existing daySlots on same date excluding same id
+                    List<Seminar> existingDaySlots = seminarRepository.findAll().stream()
+                            .filter(s -> s.getDaySlots() != null && s.getDaySlots().containsKey(key))
+                            .filter(s -> s.getHallName() != null && s.getHallName().equalsIgnoreCase(hall))
+                            .filter(notSameId)
+                            .collect(Collectors.toList());
+                    if (!existingDaySlots.isEmpty()) {
+                        throw new RuntimeException("❌ This day is already booked (daySlots) in " + hall + ". Please choose another date.");
+                    }
+                }
+            }
+        }
     }
 
     // Simple overlap check (time strings HH:mm)
